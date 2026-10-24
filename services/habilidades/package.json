@@ -1,0 +1,20 @@
+{
+  "name": "@ceibbo/habilidades",
+  "version": "0.2.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "node ../../scripts/check-service.mjs .",
+    "test": "node --test",
+    "deploy": "serverless deploy",
+    "remove": "serverless remove"
+  },
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.922.0",
+    "@aws-sdk/client-sqs": "^3.922.0",
+    "@aws-sdk/lib-dynamodb": "^3.922.0"
+  },
+  "devDependencies": {
+    "serverless": "^4.22.0"
+  }
+}
