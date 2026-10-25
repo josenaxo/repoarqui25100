@@ -26,8 +26,6 @@ Después, en `services/<servicio>/`:
    6. `src/adapters/in/http.mjs`: el handler; arma el caso de uso con los adaptadores reales y traduce el resultado a HTTP.
 4. `npm install` y `npm test`.
 
-> **Ojo con el `.gitignore`:** mientras la regla `out/` siga en el `.gitignore` de la raíz, la carpeta `src/adapters/out/` queda ignorada. Agregarla con `git add -f services/<servicio>/src/adapters/out`. Revisar con `git status` que aparezca antes del commit.
-
 ## 2. Desplegar en la cuenta propia
 
 Requisitos: Node 22 (`nvm use 22`), Serverless Framework v4 y las credenciales del Learner Lab vigentes (`aws sts get-caller-identity`).
