@@ -65,7 +65,11 @@ resources:
           - email
         AutoVerifiedAttributes:
           - email
-    
+        VerificationMessageTemplate:
+          DefaultEmailOption: CONFIRM_WITH_CODE
+          EmailSubject: 'Tu código de verificación'
+          EmailMessage: 'Hola. Tu código para activar tu cuenta es {####}. Ingrésalo en la página de registro.'
+             
     UserPoolClient:
       Type: AWS::Cognito::UserPoolClient
       Properties:
