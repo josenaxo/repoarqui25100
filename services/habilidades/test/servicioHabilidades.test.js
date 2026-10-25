@@ -5,8 +5,15 @@ import { crearServicioHabilidades } from '../src/application/servicioHabilidades
 function dobles() {
   const items = new Map()
   const publicados = []
+  const consultasPerfil = []
+  const perfilesPorToken = new Map([
+    ['token-estudiante', { userId: 'e1', tipo: 'estudiante', colegioId: 'school-1' }],
+    ['token-colegio-1', { userId: 'sub-colegio-1', tipo: 'colegio', colegioId: 'school-1' }],
+    ['token-colegio-2', { userId: 'sub-colegio-2', tipo: 'colegio', colegioId: 'school-2' }],
+  ])
   return {
     publicados,
+    consultasPerfil,
     repo: {
       async crear(h) {
         const key = `${h.estudianteId}:${h.id}`
@@ -19,26 +26,71 @@ function dobles() {
       async guardar(h) { items.set(`${h.estudianteId}:${h.id}`, h); return h },
     },
     eventos: { async publicar(evento) { publicados.push(evento) } },
+    perfiles: {
+      async obtenerPropio(token) {
+        consultasPerfil.push(token)
+        return perfilesPorToken.get(token) ?? null
+      },
+    },
   }
 }
 
 test('la declaración duplicada responde conflicto', async () => {
-  const d = dobles(); const servicio = crearServicioHabilidades(d.repo, d.eventos)
-  const actor = { id: 'e1', rol: 'estudiante' }
-  await servicio.declarar(actor, { nombre: 'Node.js', colegioId: 'c1' })
-  await assert.rejects(() => servicio.declarar(actor, { nombre: 'Node.js', colegioId: 'c1' }), (error) => error.statusCode === 409)
+  const d = dobles(); const servicio = crearServicioHabilidades(d.repo, d.eventos, d.perfiles)
+  const actor = { id: 'e1', rol: 'estudiante', token: 'token-estudiante' }
+  await servicio.declarar(actor, { nombre: 'Node.js' })
+  await assert.rejects(() => servicio.declarar(actor, { nombre: 'Node.js' }), (error) => error.statusCode === 409)
 })
 
-test('el colegio dueño valida y publica HabilidadValidada', async () => {
-  const d = dobles(); const servicio = crearServicioHabilidades(d.repo, d.eventos)
-  const habilidad = await servicio.declarar({ id: 'e1', rol: 'estudiante' }, { nombre: 'Docker', colegioId: 'c1' })
-  const resultado = await servicio.revisar({ id: 'c1', rol: 'colegio' }, 'e1', habilidad.id, { estado: 'validada' })
+test('el colegioId sale del perfil del estudiante y no del body', async () => {
+  const d = dobles(); const servicio = crearServicioHabilidades(d.repo, d.eventos, d.perfiles)
+  const habilidad = await servicio.declarar(
+    { id: 'e1', rol: 'estudiante', token: 'token-estudiante' },
+    { nombre: 'Docker', colegioId: 'school-falso' },
+  )
+  assert.equal(habilidad.colegioId, 'school-1')
+  assert.deepEqual(d.consultasPerfil, ['token-estudiante'])
+})
+
+test('el colegio dueño valida usando el colegioId de su perfil y publica HabilidadValidada', async () => {
+  const d = dobles(); const servicio = crearServicioHabilidades(d.repo, d.eventos, d.perfiles)
+  const habilidad = await servicio.declarar(
+    { id: 'e1', rol: 'estudiante', token: 'token-estudiante' },
+    { nombre: 'Docker' },
+  )
+  const resultado = await servicio.revisar(
+    { id: 'sub-colegio-1', rol: 'colegio', token: 'token-colegio-1' },
+    'e1', habilidad.id, { estado: 'validada' },
+  )
   assert.equal(resultado.estado, 'validada')
   assert.equal(d.publicados[0].tipo, 'HabilidadValidada')
+  assert.equal(d.publicados[0].datos.colegioId, 'school-1')
 })
 
 test('otro colegio no puede validar', async () => {
-  const d = dobles(); const servicio = crearServicioHabilidades(d.repo, d.eventos)
-  const habilidad = await servicio.declarar({ id: 'e1', rol: 'estudiante' }, { nombre: 'AWS', colegioId: 'c1' })
-  await assert.rejects(() => servicio.revisar({ id: 'c2', rol: 'colegio' }, 'e1', habilidad.id, { estado: 'validada' }), (error) => error.statusCode === 403)
+  const d = dobles(); const servicio = crearServicioHabilidades(d.repo, d.eventos, d.perfiles)
+  const habilidad = await servicio.declarar(
+    { id: 'e1', rol: 'estudiante', token: 'token-estudiante' },
+    { nombre: 'AWS' },
+  )
+  await assert.rejects(
+    () => servicio.revisar(
+      { id: 'sub-colegio-2', rol: 'colegio', token: 'token-colegio-2' },
+      'e1', habilidad.id, { estado: 'validada' },
+    ),
+    (error) => error.statusCode === 403,
+  )
+})
+
+test('los pendientes se consultan por colegioId y no por el sub del colegio', async () => {
+  const d = dobles(); const servicio = crearServicioHabilidades(d.repo, d.eventos, d.perfiles)
+  await servicio.declarar(
+    { id: 'e1', rol: 'estudiante', token: 'token-estudiante' },
+    { nombre: 'Git' },
+  )
+  const pendientes = await servicio.listarPendientes({
+    id: 'sub-colegio-1', rol: 'colegio', token: 'token-colegio-1',
+  })
+  assert.equal(pendientes.length, 1)
+  assert.equal(pendientes[0].colegioId, 'school-1')
 })
