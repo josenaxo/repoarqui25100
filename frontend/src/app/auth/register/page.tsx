@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useState, useEffect } from 'react'
+import { Suspense, useState } from 'react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
 import { useForm } from 'react-hook-form'
@@ -10,7 +10,8 @@ import { Input, PasswordInput } from '@/components/ui/Input'
 import { Button } from '@/components/ui/Button'
 import { CeibboLogoMark } from '@/components/ui/CeibboLogoMark'
 import { useAuthStore } from '@/store/auth.store'
-import { api } from '@/lib/api-client'
+import { registrarPerfil } from '@/lib/api/perfiles'
+import { registrar, confirmarRegistro, reenviarCodigo } from '@/lib/cognito'
 import { cn } from '@/lib/utils'
 import { usePageTitle } from '@/lib/usePageTitle'
 
@@ -48,15 +49,20 @@ const roles = [
 
 const schema = z.object({
   email:        z.string().email('Email inválido'),
-  password:     z.string().min(6, 'Mínimo 6 caracteres'),
-  firstName:    z.string().optional(),
-  lastName:     z.string().optional(),
-  specialty:    z.string().optional(),
-  year:         z.coerce.number().min(1).max(7).optional(),
-  orgName:      z.string().optional(),
-  schoolUserId: z.string().optional(),
+  password:     z.string().min(8, 'Mínimo 8 caracteres'),
+  // los mismos largos que valida perfiles, para que no falle despues de confirmar el correo
+  firstName:    z.string().trim().min(1, 'Obligatorio').max(60, 'Máximo 60 caracteres'),
+  lastName:     z.string().trim().min(1, 'Obligatorio').max(60, 'Máximo 60 caracteres'),
+  // el select manda '' si no se elige nada, y con coerce eso era 0 y bloqueaba el formulario
+  year:         z.union([z.literal(''), z.coerce.number().int().min(1).max(7)]).optional(),
 })
 type FormValues = z.infer<typeof schema>
+
+// los errores de la API traen { mensaje } y los de cognito.ts ya vienen en espanol
+function mensajeDeError(err: any): string {
+  if (err?.isAxiosError) return err.response?.data?.mensaje ?? 'No se pudo guardar tu perfil. Intenta de nuevo.'
+  return err?.message ?? 'No se pudo terminar el registro. Intenta de nuevo.'
+}
 
 export default function RegisterPageWrapper() {
   usePageTitle('Crear cuenta')
@@ -76,14 +82,14 @@ function RegisterPage() {
   const [selectedRole, setSelectedRole] = useState<Role>(initialRole ?? 'STUDENT')
   const [loading, setLoading]         = useState(false)
   const [error, setError]             = useState('')
-  const [schools, setSchools]         = useState<{ id: string; userId: string; name: string }[]>([])
+  // datos del formulario mientras se espera el codigo del correo
+  const [pendiente, setPendiente]     = useState<FormValues | null>(null)
+  const [confirmado, setConfirmado]   = useState(false)
+  const [codigo, setCodigo]           = useState('')
+  const [aviso, setAviso]             = useState('')
 
-  const login = useAuthStore(s => s.login)
-
-  useEffect(() => {
-    api.get<{ id: string; userId: string; name: string }[]>('/schools').catch(() => [])
-      .then(data => setSchools(data))
-  }, [])
+  const login         = useAuthStore(s => s.login)
+  const refreshTokens = useAuthStore(s => s.refreshTokens)
 
   const { register, handleSubmit, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
@@ -91,40 +97,83 @@ function RegisterPage() {
 
   const selectedRoleData = roles.find(r => r.key === selectedRole)!
 
-  const onSubmit = async (data: FormValues) => {
-    // Validate required fields per role
-    if (selectedRole === 'STUDENT' && (!data.firstName?.trim() || !data.lastName?.trim())) {
-      return
-    }
-    if ((selectedRole === 'EMPRESA' || selectedRole === 'COLEGIO') && !data.orgName?.trim()) {
-      return
-    }
+  // con el correo confirmado: entra, crea el perfil y renueva la sesion
+  // para que el token traiga el grupo estudiante que le puso perfiles
+  const terminarRegistro = async (datos: FormValues) => {
+    await login({ email: datos.email, password: datos.password })
+    await registrarPerfil({
+      nombre:       datos.firstName,
+      apellido:     datos.lastName,
+      anio:         typeof datos.year === 'number' ? datos.year : undefined,
+    }).catch((err: any) => {
+      // 409 = el perfil ya estaba creado de un intento anterior
+      if (err?.response?.status !== 409) throw err
+    })
+    await refreshTokens()
+    router.push(roleRedirect.STUDENT)
+  }
 
+  // paso 1: crea la cuenta en Cognito, que manda un codigo al correo
+  const onSubmit = async (data: FormValues) => {
     setLoading(true)
     setError('')
+    setAviso('')
     try {
-      await api.post('/auth/register', {
-        email:        data.email,
-        password:     data.password,
-        role:         selectedRole,
-        firstName:    data.firstName?.trim(),
-        lastName:     data.lastName?.trim(),
-        specialty:    selectedRole === 'STUDENT' ? data.specialty?.trim() : undefined,
-        year:         selectedRole === 'STUDENT' ? data.year : undefined,
-        schoolUserId: selectedRole === 'STUDENT' ? (data.schoolUserId || undefined) : undefined,
-        companyName:  selectedRole === 'EMPRESA' ? data.orgName?.trim() : undefined,
-        schoolName:   selectedRole === 'COLEGIO' ? data.orgName?.trim() : undefined,
-      })
-      // Login automatically after register
-      await login({ email: data.email, password: data.password })
-      router.push(roleRedirect[selectedRole])
+      const datos  = { ...data, email: data.email.trim().toLowerCase() }
+      const estado = await registrar(datos.email, datos.password)
+      setPendiente(datos)
+      if (estado === 'sin-confirmar') setAviso('Ya habías empezado el registro. Te enviamos un código nuevo.')
+      if (estado === 'confirmada') {
+        setConfirmado(true)
+        await terminarRegistro(datos)
+      }
     } catch (err: any) {
-      const msg = err?.response?.data?.message
-      setError(Array.isArray(msg) ? msg[0] : msg ?? 'Error al crear la cuenta. Intentá nuevamente.')
+      setError(mensajeDeError(err))
     } finally {
       setLoading(false)
     }
   }
+
+  // paso 2: confirma el codigo y termina el registro
+  const confirmar = async (e: React.FormEvent) => {
+    e.preventDefault()
+    if (!pendiente) return
+
+    setLoading(true)
+    setError('')
+    setAviso('')
+    try {
+      // si fallo despues de confirmar, al reintentar no se confirma de nuevo
+      if (!confirmado) {
+        await confirmarRegistro(pendiente.email, codigo)
+        setConfirmado(true)
+      }
+      await terminarRegistro(pendiente)
+    } catch (err: any) {
+      setError(mensajeDeError(err))
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const reenviar = async () => {
+    if (!pendiente) return
+    setError('')
+    setAviso('')
+    try {
+      await reenviarCodigo(pendiente.email)
+      setAviso('Te enviamos un código nuevo.')
+    } catch (err: any) {
+      setError(err?.message)
+    }
+  }
+
+  const alerta = error && (
+    <div role="alert" className="flex items-center gap-2 bg-error-container rounded-xl px-4 py-3 text-sm">
+      <span className="material-symbols-outlined text-[18px] text-error shrink-0" aria-hidden="true">error</span>
+      <span className="text-on-error-container">{error}</span>
+    </div>
+  )
 
   return (
     <main className="min-h-screen bg-surface flex">
@@ -230,6 +279,49 @@ function RegisterPage() {
                 </div>
               </div>
 
+              {/* Colegios y empresas no se registran solos: no hay rol admin que los verifique */}
+              {selectedRole !== 'STUDENT' ? (
+                <div className="rounded-xl bg-surface-container-low px-4 py-4 text-sm text-on-surface-variant">
+                  Las cuentas de {selectedRole === 'EMPRESA' ? 'empresa' : 'colegio'} las crea el equipo de Ceibbo, para
+                  verificar que sean reales. Si ya tienes una,{' '}
+                  <Link href="/auth/login" className="text-primary font-semibold hover:underline">inicia sesión</Link>.
+                </div>
+              ) : pendiente ? (
+                /* PASO 3: Codigo del correo */
+                <form onSubmit={confirmar} className="space-y-5">
+                  {/* ya confirmado solo queda reintentar crear el perfil */}
+                  {!confirmado && (
+                    <>
+                      <p className="text-sm text-on-surface-variant">
+                        Te enviamos un código a <span className="font-semibold text-on-surface">{pendiente.email}</span>.
+                        Escríbelo para confirmar tu correo.
+                      </p>
+
+                      <Input
+                        label="Código *"
+                        placeholder="123456"
+                        inputMode="numeric"
+                        autoComplete="one-time-code"
+                        value={codigo}
+                        onChange={e => setCodigo(e.target.value)}
+                      />
+                    </>
+                  )}
+
+                  {alerta}
+                  {aviso && <p className="text-sm text-on-surface-variant">{aviso}</p>}
+
+                  <Button type="submit" fullWidth loading={loading} size="lg" disabled={!confirmado && !codigo.trim()}>
+                    {confirmado ? 'Reintentar' : 'Confirmar y entrar'}
+                  </Button>
+
+                  {!confirmado && (
+                    <button type="button" onClick={reenviar} className="w-full text-sm text-primary font-semibold hover:underline">
+                      No me llegó el código, enviarlo de nuevo
+                    </button>
+                  )}
+                </form>
+              ) : (
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">
 
                 {selectedRole === 'STUDENT' && (
@@ -248,61 +340,23 @@ function RegisterPage() {
                         {...register('lastName')}
                       />
                     </div>
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                      <div>
-                        <label htmlFor="reg-specialty" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">
-                          Especialidad
-                        </label>
-                        <input
-                          id="reg-specialty"
-                          placeholder="Informática, Electrónica..."
-                          className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2.5 text-sm outline-none transition-colors"
-                          {...register('specialty')}
-                        />
-                      </div>
-                      <div>
-                        <label htmlFor="reg-year" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">
-                          Año cursado
-                        </label>
-                        <select
-                          id="reg-year"
-                          className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2.5 text-sm outline-none transition-colors"
-                          {...register('year')}
-                        >
-                          <option value="">Seleccionar...</option>
-                          {[1, 2, 3, 4].map(y => (
-                            <option key={y} value={y}>{y}° año</option>
-                          ))}
-                        </select>
-                      </div>
+                    {/* la especialidad se elige al editar el perfil, de la lista que configura cada colegio */}
+                    <div>
+                      <label htmlFor="reg-year" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">
+                        Año cursado
+                      </label>
+                      <select
+                        id="reg-year"
+                        className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2.5 text-sm outline-none transition-colors"
+                        {...register('year')}
+                      >
+                        <option value="">Seleccionar...</option>
+                        {[1, 2, 3, 4].map(y => (
+                          <option key={y} value={y}>{y}° año</option>
+                        ))}
+                      </select>
                     </div>
-                    {schools.length > 0 && (
-                      <div>
-                        <label htmlFor="reg-school" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">
-                          Mi colegio <span className="font-normal normal-case">(opcional)</span>
-                        </label>
-                        <select
-                          id="reg-school"
-                          className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2.5 text-sm outline-none transition-colors"
-                          {...register('schoolUserId')}
-                        >
-                          <option value="">— Sin colegio vinculado —</option>
-                          {schools.map(s => (
-                            <option key={s.userId} value={s.userId}>{s.name}</option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
                   </>
-                )}
-
-                {(selectedRole === 'EMPRESA' || selectedRole === 'COLEGIO') && (
-                  <Input
-                    label={selectedRole === 'EMPRESA' ? 'Nombre de la empresa *' : 'Nombre del colegio *'}
-                    placeholder={selectedRole === 'EMPRESA' ? 'TechCorp Chile SpA' : 'Centro Educacional Cardenal José María Caro'}
-                    error={errors.orgName?.message}
-                    {...register('orgName')}
-                  />
                 )}
 
                 <Input
@@ -316,17 +370,12 @@ function RegisterPage() {
 
                 <PasswordInput
                   label="Contraseña *"
-                  placeholder="Mínimo 6 caracteres"
+                  placeholder="Mínimo 8 caracteres"
                   error={errors.password?.message}
                   {...register('password')}
                 />
 
-                {error && (
-                  <div role="alert" className="flex items-center gap-2 bg-error-container rounded-xl px-4 py-3 text-sm">
-                    <span className="material-symbols-outlined text-[18px] text-error shrink-0" aria-hidden="true">error</span>
-                    <span className="text-on-error-container">{error}</span>
-                  </div>
-                )}
+                {alerta}
 
                 <Button type="submit" fullWidth loading={loading} size="lg">
                   Crear cuenta como {selectedRoleData.label}
@@ -336,6 +385,7 @@ function RegisterPage() {
                   Al crear una cuenta aceptas nuestros Términos de uso y Política de privacidad.
                 </p>
               </form>
+              )}
 
               <p className="text-center text-sm text-on-surface-variant mt-6">
                 ¿Ya tienes cuenta?{' '}

@@ -1,0 +1,285 @@
+openapi: 3.0.3
+info:
+  title: Ceibbo - servicio perfiles
+  version: 1.0.0
+  description: |
+    Perfiles de estudiantes, empresas y colegios, y la configuración (personalización) de cada colegio.
+    Casos de uso CU-01 y CU-02. Modelo de datos y patrones de acceso en docs/datos/perfiles.md.
+    Todas las rutas exigen un access token de Cognito (autorizador JWT del HTTP API).
+    El grupo permitido de cada ruta se indica en `x-grupos` y se valida en el caso de uso.
+
+servers:
+  - url: https://{apiId}.execute-api.us-east-1.amazonaws.com
+    variables:
+      apiId:
+        default: ceibbo
+        description: Valor de HttpApiUrl en los outputs de infra/shared
+
+security:
+  - cognito: []
+
+paths:
+  /perfiles:
+    post:
+      operationId: registrarPerfil
+      summary: Crear mi perfil (patrón 1)
+      description: |
+        Crea el perfil del usuario del token y lo agrega al grupo `estudiante`.
+        El registro público solo crea perfiles de estudiante; los de colegio y empresa los crea el equipo.
+      x-grupos: [cualquier usuario autenticado sin perfil]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PerfilEstudianteNuevo' }
+      responses:
+        '201':
+          description: Perfil creado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Perfil' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403':
+          description: El usuario es de un colegio o de una empresa (no se registran por esta vía)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+        '409':
+          description: El usuario ya tiene perfil
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
+
+  /perfiles/me:
+    get:
+      operationId: obtenerPerfil
+      summary: Ver mi perfil (patrón 2)
+      description: Un usuario recién registrado todavía no tiene grupo en su token; por eso recibe 404 (sin perfil) y no 403.
+      x-grupos: [cualquier usuario autenticado, solo su propio perfil]
+      responses:
+        '200':
+          description: Perfil del usuario del token
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Perfil' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      operationId: actualizarPerfil
+      summary: Editar mi perfil (patrón 3)
+      description: Actualiza los campos editables enviados. `readinessScore`, `profileViews`, `tipo` y `userId` no se pueden editar y se ignoran.
+      x-grupos: [cualquier usuario autenticado, solo su propio perfil]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/PerfilEditable' }
+      responses:
+        '200':
+          description: Perfil actualizado
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Perfil' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /colegios:
+    get:
+      operationId: listarColegios
+      summary: Listar colegios (patrón 6)
+      description: Para el selector de colegio del perfil del estudiante.
+      x-grupos: [estudiante, empresa, colegio]
+      responses:
+        '200':
+          description: Lista de colegios
+          content:
+            application/json:
+              schema:
+                type: array
+                items: { $ref: '#/components/schemas/ColegioResumen' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+
+  /colegios/{id}/config:
+    parameters:
+      - $ref: '#/components/parameters/ColegioId'
+    get:
+      operationId: obtenerConfigColegio
+      summary: Ver la configuración de un colegio (patrón 4)
+      description: Datos del colegio y su personalización (logo, color principal, bienvenida).
+      x-grupos: [estudiante, empresa, colegio]
+      responses:
+        '200':
+          description: Configuración del colegio
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigColegio' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+    put:
+      operationId: actualizarConfigColegio
+      summary: Editar la configuración del colegio (patrón 5)
+      description: Solo el usuario colegio dueño de ese colegio (su `colegioId` debe coincidir con `{id}`).
+      x-grupos: [colegio]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema: { $ref: '#/components/schemas/ConfigColegioEditable' }
+      responses:
+        '200':
+          description: Configuración actualizada
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/ConfigColegio' }
+        '400': { $ref: '#/components/responses/SolicitudInvalida' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+        '404': { $ref: '#/components/responses/NoEncontrado' }
+
+  /colegios/{id}/estudiantes:
+    parameters:
+      - $ref: '#/components/parameters/ColegioId'
+    get:
+      operationId: listarEstudiantesColegio
+      summary: Estudiantes de un colegio (patrón 7)
+      description: Solo el usuario colegio dueño de ese colegio. Incluye el total y el score promedio.
+      x-grupos: [colegio]
+      responses:
+        '200':
+          description: Estudiantes del colegio
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/EstudiantesColegio' }
+        '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403': { $ref: '#/components/responses/Prohibido' }
+
+components:
+  securitySchemes:
+    cognito:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: Access token de Cognito. El grupo viaja en el claim `cognito:groups`.
+
+  parameters:
+    ColegioId:
+      name: id
+      in: path
+      required: true
+      schema: { type: string, example: school-1 }
+
+  responses:
+    SolicitudInvalida:
+      description: Cuerpo inválido o con campos no permitidos
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoAutenticado:
+      description: Falta el token o no es válido (lo responde el autorizador JWT)
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    Prohibido:
+      description: El grupo del usuario no puede usar esta ruta o el colegio no es suyo
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+    NoEncontrado:
+      description: El recurso no existe
+      content:
+        application/json:
+          schema: { $ref: '#/components/schemas/Error' }
+
+  schemas:
+    Error:
+      type: object
+      required: [mensaje]
+      properties:
+        mensaje: { type: string, example: Perfil no encontrado }
+
+    PerfilEstudianteNuevo:
+      type: object
+      required: [nombre, apellido]
+      properties:
+        nombre: { type: string, maxLength: 60, example: Matías }
+        apellido: { type: string, maxLength: 60, example: Arancibia }
+        colegioId: { type: string, example: school-1 }
+        especialidad: { type: string, maxLength: 80, example: Programación, description: "Una de las especialidades TP oficiales del Mineduc (sola o con su mención), y que imparta el colegio del estudiante. Vacía para quitarla." }
+
+    PerfilEditable:
+      type: object
+      description: Campos que el usuario puede editar según su tipo. Los de empresa se ignoran para un estudiante y viceversa.
+      properties:
+        nombre: { type: string, maxLength: 60 }
+        apellido: { type: string, maxLength: 60 }
+        titular: { type: string, maxLength: 120 }
+        bio: { type: string, maxLength: 1000 }
+        especialidad: { type: string, maxLength: 80, description: "Una de las especialidades TP oficiales del Mineduc (sola o con su mención), y que imparta el colegio del estudiante. Vacía para quitarla." }
+        anio: { type: integer, minimum: 1, maximum: 7 }
+        telefono: { type: string, maxLength: 20 }
+        ubicacion: { type: string, maxLength: 80 }
+        colegioId: { type: string }
+        descripcion: { type: string, maxLength: 1000 }
+        industria: { type: string, maxLength: 80 }
+        tamanio: { type: string, maxLength: 40 }
+        sitioWeb: { type: string, format: uri }
+
+    Perfil:
+      allOf:
+        - $ref: '#/components/schemas/PerfilEditable'
+        - type: object
+          required: [userId, tipo]
+          properties:
+            userId: { type: string, example: usr-1 }
+            tipo: { type: string, enum: [estudiante, empresa, colegio] }
+            email: { type: string, format: email }
+            readinessScore: { type: integer, minimum: 0, maximum: 100, readOnly: true, example: 82 }
+            profileViews: { type: integer, minimum: 0, readOnly: true }
+
+    ColegioResumen:
+      type: object
+      required: [id, nombre]
+      properties:
+        id: { type: string, example: school-1 }
+        nombre: { type: string, example: Instituto Técnico Metropolitano }
+        logo: { type: string }
+
+    ConfigColegioEditable:
+      type: object
+      required: [nombre]
+      properties:
+        nombre: { type: string, maxLength: 120 }
+        descripcion: { type: string, maxLength: 1000 }
+        ubicacion: { type: string, maxLength: 120 }
+        sitioWeb: { type: string, format: uri }
+        especialidades:
+          type: array
+          maxItems: 20
+          description: Especialidades que imparte el colegio. Solo se aceptan las TP oficiales del Mineduc, solas o con su mención, por ejemplo "Gastronomía" o "Gastronomía - Mención Cocina".
+          items: { type: string, maxLength: 80 }
+        logo: { type: string }
+        colorPrincipal:
+          type: string
+          pattern: '^#[0-9A-Fa-f]{6}$'
+          example: '#0F4C5C'
+        bienvenida: { type: string, maxLength: 200 }
+
+    ConfigColegio:
+      allOf:
+        - type: object
+          required: [id]
+          properties:
+            id: { type: string, example: school-1 }
+        - $ref: '#/components/schemas/ConfigColegioEditable'
+
+    EstudiantesColegio:
+      type: object
+      required: [total, scorePromedio, estudiantes]
+      properties:
+        total: { type: integer, example: 2 }
+        scorePromedio: { type: number, example: 75 }
+        estudiantes:
+          type: array
+          items: { $ref: '#/components/schemas/Perfil' }

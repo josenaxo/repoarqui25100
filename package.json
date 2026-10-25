@@ -1,0 +1,29 @@
+{
+  "name": "ceibbo",
+  "private": true,
+  "version": "1.0.0",
+  "description": "> La red profesional para talento técnico-profesional. Conecta estudiantes, colegios y empresas.",
+  
+  "scripts": {
+    "local:up": "docker compose up -d && node scripts/local/crear-tabla.mjs && node scripts/local/seed.mjs",
+    "local:down": "docker compose down",
+    "local:verificar": "node scripts/local/verificar.mjs"
+  },
+
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Informatica-UDD-Asignaturas/REPO_ARQ_202603_1.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/Informatica-UDD-Asignaturas/REPO_ARQ_202603_1/issues"
+  },
+  "homepage": "https://github.com/Informatica-UDD-Asignaturas/REPO_ARQ_202603_1#readme",
+  "dependencies": {
+    "@aws-sdk/client-dynamodb": "^3.1156.0",
+    "@aws-sdk/lib-dynamodb": "^3.1156.0"
+  }
+}

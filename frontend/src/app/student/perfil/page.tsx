@@ -13,6 +13,7 @@ import { api } from '@/lib/api-client'
 import { useAuthStore } from '@/store/auth.store'
 import { calculateReadinessScore, timeAgo, mediaUrl } from '@/lib/utils'
 import { usePageTitle } from '@/lib/usePageTitle'
+import { obtenerPerfilConColegio, aStudentProfile, mensajeDeError, type ConfigColegio } from '@/lib/api/perfiles'
 import type { StudentProfile, Publication, Application } from '@/types'
 
 function getTrafficLight(score: number) {
@@ -46,6 +47,8 @@ export default function StudentPerfilPage() {
   const { isAuthenticated, user, logout } = useAuthStore()
   const router = useRouter()
   const [student,      setStudent]      = useState<StudentProfile | null>(null)
+  const [colegio,      setColegio]      = useState<ConfigColegio | null>(null)
+  const [errorCarga,   setErrorCarga]   = useState('')
   usePageTitle(student ? `${student.firstName} ${student.lastName}` : 'Mi perfil')
   const [publications, setPublications] = useState<Publication[]>([])
   const [highlights,   setHighlights]   = useState<Publication[]>([])
@@ -60,12 +63,16 @@ export default function StudentPerfilPage() {
   useEffect(() => {
     if (!isAuthenticated) { setLoading(false); return }
     Promise.all([
-      api.get<StudentProfile>('/students/me').catch(() => null),
+      obtenerPerfilConColegio().catch(err => {
+        setErrorCarga(mensajeDeError(err, 'No se pudo cargar tu perfil. Intenta de nuevo.'))
+        return null
+      }),
       api.get<Publication[]>('/publications/mine?story=false').catch(() => []),
       user?.id ? api.get<Publication[]>(`/publications/pinned/${user.id}`).catch(() => []) : Promise.resolve([]),
       user?.id ? api.get<{ followers: number; following: number }>(`/follows/counts/${user.id}`).catch(() => ({ followers: 0, following: 0 })) : Promise.resolve({ followers: 0, following: 0 }),
     ]).then(([s, pubs, pins, counts]) => {
-      setStudent(s)
+      setStudent(s ? aStudentProfile(s.perfil, s.colegio) : null)
+      setColegio(s?.colegio ?? null)
       setPublications(pubs)
       setHighlights((pins as Publication[]).filter(p => p.isStory))
       setFollowerCount((counts as { followers: number; following: number }).followers)
@@ -136,7 +143,7 @@ export default function StudentPerfilPage() {
         <div className="flex flex-col items-center justify-center py-24 text-center">
           <span className="material-symbols-outlined text-[64px] text-outline">person_off</span>
           <h2 className="font-headline text-xl font-bold text-on-surface mt-4">Perfil no encontrado</h2>
-          <p className="text-on-surface-variant text-sm mt-2">Inicia sesión para ver tu perfil.</p>
+          <p className="text-on-surface-variant text-sm mt-2">{errorCarga || 'Inicia sesión para ver tu perfil.'}</p>
         </div>
       </main>
     )
@@ -211,11 +218,18 @@ export default function StudentPerfilPage() {
                 </span>
               </div>
               <p className="text-on-surface-variant font-semibold mb-1">{student.headline}</p>
+              {/* el color lo elige el colegio en su configuracion */}
               {student.schoolName && (
-                <div className="inline-flex items-center gap-2 mt-3 px-3 py-1.5 rounded-full bg-blue-50 border border-blue-200">
-                  <span className="material-symbols-outlined text-[14px] text-blue-600 icon-filled">verified</span>
-                  <span className="text-xs font-bold text-blue-700">Avalado por {student.schoolName}</span>
+                <div
+                  className="inline-flex items-center gap-2 mt-3 px-3 py-1.5 rounded-full bg-blue-50 border border-blue-200 text-blue-700"
+                  style={colegio?.colorPrincipal ? { color: colegio.colorPrincipal, borderColor: colegio.colorPrincipal, backgroundColor: `${colegio.colorPrincipal}14` } : undefined}
+                >
+                  <span className="material-symbols-outlined text-[14px] icon-filled">verified</span>
+                  <span className="text-xs font-bold">Avalado por {student.schoolName}</span>
                 </div>
+              )}
+              {colegio?.bienvenida && (
+                <p className="mt-2 text-xs text-on-surface-variant">{colegio.bienvenida}</p>
               )}
               <p className="text-sm text-outline flex items-center gap-1.5 flex-wrap">
                 {student.location && (
@@ -226,7 +240,7 @@ export default function StudentPerfilPage() {
                   </>
                 )}
                 <span className="material-symbols-outlined text-[14px]">school</span>
-                {[student.schoolName, student.specialty || null, `${student.year}° año`].filter(Boolean).join(' · ')}
+                {[student.schoolName, student.specialty || null, student.year ? `${student.year}° año` : null].filter(Boolean).join(' · ')}
               </p>
 
               {student.bio && (

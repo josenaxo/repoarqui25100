@@ -1,50 +1,11 @@
 import { create } from 'zustand'
 import { persist } from 'zustand/middleware'
 import type { AuthState, AuthUser, LoginDto, AuthTokens } from '@/types'
-import { api } from '@/lib/api-client'
+import { iniciarSesion, cerrarSesion, leerSesion } from '@/lib/cognito'
 import { socketManager } from '@/lib/socket'
 
-const demoAccounts: Record<string, { password: string; role: AuthUser['role']; userId: string }> = {
-  'matias.arancibia@alumnos.colegiocaro.cl': {
-    password: 'Demo1234!',
-    role: 'STUDENT',
-    userId: 'demo-student-user',
-  },
-  'techsolutions@redtalento.cl': {
-    password: 'Demo1234!',
-    role: 'EMPRESA',
-    userId: 'demo-company-user',
-  },
-  'colegio@redtalento.cl': {
-    password: 'Demo1234!',
-    role: 'COLEGIO',
-    userId: 'demo-school-user',
-  },
-}
-
-function buildDemoSession(credentials: LoginDto) {
-  const email = credentials.email.trim().toLowerCase()
-  const account = demoAccounts[email]
-
-  if (!account || account.password !== credentials.password) return null
-
-  const tokens: AuthTokens = {
-    accessToken: `demo-access-token-${account.userId}`,
-    refreshToken: `demo-refresh-token-${account.userId}`,
-  }
-
-  const user: AuthUser = {
-    id: account.userId,
-    email,
-    role: account.role,
-    isActive: true,
-    createdAt: new Date().toISOString() as any,
-    updatedAt: new Date().toISOString() as any,
-  }
-
-  return { tokens, user }
-}
-
+// Amplify guarda y renueva los tokens por su cuenta. api-client le pide el token vigente
+// en cada llamada, asi que tokens aca es solo la copia del momento del login
 export const useAuthStore = create<AuthState>()(
   persist(
     (set, get) => ({
@@ -56,87 +17,44 @@ export const useAuthStore = create<AuthState>()(
       login: async (credentials: LoginDto) => {
         set({ isLoading: true })
         try {
-          // Backend returns: { accessToken, refreshToken, role, userId }
-          const response = await api.post<{
-            accessToken: string
-            refreshToken: string
-            role: string
-            userId: string
-          }>('/auth/login', credentials)
+          const email  = credentials.email.trim().toLowerCase()
+          const sesion = await iniciarSesion(email, credentials.password)
 
-          const tokens: AuthTokens = {
-            accessToken:  response.accessToken,
-            refreshToken: response.refreshToken,
-          }
+          const tokens: AuthTokens = { accessToken: sesion.accessToken, refreshToken: '' }
 
           const user: AuthUser = {
-            id:          response.userId,
-            email:       credentials.email,
-            role:        response.role as any,
+            id:          sesion.userId,
+            email,
+            role:        sesion.role,
             isActive:    true,
             createdAt:   new Date().toISOString() as any,
             updatedAt:   new Date().toISOString() as any,
           }
 
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('access_token',  tokens.accessToken)
-            localStorage.setItem('refresh_token', tokens.refreshToken)
-          }
-
           set({ user, tokens, isAuthenticated: true, isLoading: false })
         } catch (error) {
-          const demoSession = buildDemoSession(credentials)
-
-          if (demoSession) {
-            if (typeof window !== 'undefined') {
-              localStorage.setItem('access_token',  demoSession.tokens.accessToken)
-              localStorage.setItem('refresh_token', demoSession.tokens.refreshToken)
-            }
-
-            set({
-              user: demoSession.user,
-              tokens: demoSession.tokens,
-              isAuthenticated: true,
-              isLoading: false,
-            })
-            return
-          }
-
           set({ isLoading: false })
           throw error
         }
       },
 
       logout: () => {
-        if (typeof window !== 'undefined') {
-          localStorage.removeItem('access_token')
-          localStorage.removeItem('refresh_token')
-        }
+        cerrarSesion().catch(() => {})
         socketManager.disconnect()
         set({ user: null, tokens: null, isAuthenticated: false })
       },
 
+      // se usa despues de crear el perfil, para que el token traiga el grupo nuevo
       refreshTokens: async () => {
-        const { tokens } = get()
-        if (!tokens?.refreshToken) return
-
         try {
-          const response = await api.post<{
-            accessToken: string
-            refreshToken: string
-          }>('/auth/refresh', { refreshToken: tokens.refreshToken })
+          const sesion = await leerSesion(true)
+          if (!sesion) return get().logout()
 
-          const newTokens: AuthTokens = {
-            accessToken:  response.accessToken,
-            refreshToken: response.refreshToken,
-          }
-
-          if (typeof window !== 'undefined') {
-            localStorage.setItem('access_token',  newTokens.accessToken)
-            localStorage.setItem('refresh_token', newTokens.refreshToken)
-          }
-
-          set({ tokens: newTokens })
+          const user = get().user
+          set({
+            tokens: { accessToken: sesion.accessToken, refreshToken: '' },
+            user:   user ? { ...user, role: sesion.role } : user,
+          })
         } catch {
           get().logout()
         }
@@ -148,7 +66,6 @@ export const useAuthStore = create<AuthState>()(
       name: 'ceibbo-auth',
       partialize: (state) => ({
         user:            state.user,
-        tokens:          state.tokens,
         isAuthenticated: state.isAuthenticated,
       }),
     },

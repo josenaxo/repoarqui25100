@@ -216,6 +216,35 @@ El backend usa `synchronize: true` en desarrollo, por lo que las tablas se crean
 
 ---
 
+## Probar en local (DynamoDB en Docker)
+
+Permite probar los servicios contra una base DynamoDB local, sin gastar el Learner Lab ni necesitar credenciales de AWS.
+
+**Requisitos:** Docker Desktop abierto y Node.js 22.
+
+```bash
+npm install              # solo la primera vez, en la raíz del repo
+npm run local:up         # levanta DynamoDB Local, crea la tabla y carga datos de prueba
+npm run local:verificar  # comprueba la configuración del colegio y los estudiantes
+npm run local:down       # apaga el contenedor (los datos se borran: es en memoria)
+```
+
+- DynamoDB Local queda en `http://localhost:8000`, con la tabla `ceibbo-app-local`.
+- El esquema (`PK`, `SK` y el índice `GSI1`) es el mismo que `infra/shared`. Si cambia uno, hay que cambiar el otro (`scripts/local/crear-tabla.mjs`).
+- Los datos de prueba están en `scripts/local/seed.mjs` y usan los mismos nombres e IDs que `frontend/src/lib/mock-data.ts`.
+
+Para que un servicio use la base local, define estas variables. DynamoDB Local exige credenciales, pero no tienen que ser reales:
+
+```bash
+DYNAMO_ENDPOINT=http://localhost:8000
+TABLE_NAME=ceibbo-app-local
+AWS_REGION=us-east-1
+AWS_ACCESS_KEY_ID=local
+AWS_SECRET_ACCESS_KEY=local
+```
+
+---
+
 ## Cómo ejecutar
 
 ### Frontend (desarrollo)

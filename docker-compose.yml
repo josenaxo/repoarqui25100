@@ -1,0 +1,12 @@
+# Entorno local (B1-04): DynamoDB Local para probar los servicios sin gastar el Learner Lab.
+# Uso: npm run local:up  (levanta el contenedor, crea la tabla y carga datos de prueba)
+services:
+  dynamodb:
+    image: amazon/dynamodb-local:latest
+    container_name: ceibbo-dynamodb-local
+    # -inMemory: los datos viven solo mientras el contenedor está encendido (cada arranque parte limpio).
+    # -sharedDb: una sola base para cualquier región y credencial, así todos ven la misma tabla.
+    command: "-jar DynamoDBLocal.jar -sharedDb -inMemory"
+    ports:
+      - "8000:8000"
+ 

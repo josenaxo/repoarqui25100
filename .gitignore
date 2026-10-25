@@ -7,7 +7,7 @@ node_modules/
 .next/
 dist/
 build/
-out/
+frontend/out/
 .vercel/
 
 # Environment files
@@ -55,3 +55,6 @@ next-env.d.ts
 # Test coverage
 coverage/
 .nyc_output/
+# Serverless Framework
+.serverless/
+.esbuild/

@@ -11,6 +11,7 @@ import { useAuthStore } from '@/store/auth.store'
 import { calculateReadinessScore } from '@/lib/utils'
 import type { StudentProfile, Opportunity } from '@/types'
 import { usePageTitle } from '@/lib/usePageTitle'
+import { obtenerPerfilConColegio, aStudentProfile } from '@/lib/api/perfiles'
 
 export default function StudentInicioPage() {
   usePageTitle('Inicio')
@@ -22,7 +23,7 @@ export default function StudentInicioPage() {
   useEffect(() => {
     if (isAuthenticated) {
       Promise.all([
-        api.get<StudentProfile>('/students/me').catch(() => null),
+        obtenerPerfilConColegio().then(r => aStudentProfile(r.perfil, r.colegio)).catch(() => null),
         api.get<{ data: Opportunity[] } | Opportunity[]>('/opportunities/for-me').catch(() => ({ data: [] })),
       ]).then(([p, oppsRes]) => {
         setProfile(p)

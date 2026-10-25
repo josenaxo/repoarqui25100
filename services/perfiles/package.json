@@ -1,0 +1,16 @@
+{
+  "name": "ceibbo-perfiles",
+  "private": true,
+  "version": "0.1.0",
+  "description": "Servicio perfiles de Ceibbo: perfiles de usuario y config por colegio",
+  "type": "module",
+  "scripts": {
+    "test": "node --test \"test/*.test.mjs\"",
+    "test:integracion": "node ../../scripts/local/crear-tabla.mjs && node ../../scripts/local/seed.mjs && node --test \"test/integracion/*.test.mjs\""
+  },
+  "devDependencies": {
+    "@aws-sdk/client-cognito-identity-provider": "^3.1156.0",
+    "@aws-sdk/client-dynamodb": "^3.1156.0",
+    "@aws-sdk/lib-dynamodb": "^3.1156.0"
+  }
+}
