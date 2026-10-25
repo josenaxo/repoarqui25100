@@ -13,6 +13,7 @@ provider:
   environment:
     TABLE_NAME: ${cf:ceibbo-shared-${sls:stage}.TableName}
     EVENTS_QUEUE_URL: ${cf:ceibbo-shared-${sls:stage}.EventsQueueUrl}
+    API_BASE_URL: ${cf:ceibbo-shared-${sls:stage}.HttpApiUrl}
 
 functions:
   habilidades:
