@@ -34,7 +34,6 @@ const roles = [
     description: 'Accede a tu perfil, habilidades y oportunidades',
     icon:        'school',
     color:       'from-blue-500 to-indigo-600',
-    demo:        { email: 'matias.arancibia@alumnos.colegiocaro.cl', password: 'Demo1234!' },
   },
   {
     key:         'EMPRESA' as Role,
@@ -42,7 +41,6 @@ const roles = [
     description: 'Gestiona ofertas y encuentra el talento técnico',
     icon:        'business',
     color:       'from-violet-500 to-purple-700',
-    demo:        { email: 'techsolutions@redtalento.cl', password: 'Demo1234!' },
   },
   {
     key:         'COLEGIO' as Role,
@@ -50,7 +48,6 @@ const roles = [
     description: 'Administra estudiantes y validaciones',
     icon:        'account_balance',
     color:       'from-emerald-500 to-teal-700',
-    demo:        { email: 'colegio@redtalento.cl', password: 'Demo1234!' },
   },
 ]
 
@@ -63,20 +60,13 @@ export default function LoginPage() {
   const [loading, setLoading] = useState(false)
   const [error,   setError]   = useState('')
 
-  const { register, handleSubmit, setValue, formState: { errors } } = useForm<FormValues>({
+  const { register, handleSubmit, formState: { errors } } = useForm<FormValues>({
     resolver: zodResolver(schema),
   })
 
   const selectRole = (role: typeof roles[0]) => {
     setSelectedRole(role.key)
     setError('')
-  }
-
-  const loadDemo = () => {
-    const role = roles.find(r => r.key === selectedRole)
-    if (!role) return
-    setValue('email',    role.demo.email)
-    setValue('password', role.demo.password)
   }
 
   const onSubmit = async (data: FormValues) => {
@@ -87,8 +77,7 @@ export default function LoginPage() {
       const role = useAuthStore.getState().user?.role as Role
       router.push(roleRedirect[role] ?? '/student/inicio')
     } catch (err: any) {
-      const msg = err?.response?.data?.message
-      setError(Array.isArray(msg) ? msg[0] : msg ?? 'Credenciales incorrectas. Verificá tu email y contraseña.')
+      setError(err?.message ?? 'Credenciales incorrectas. Verificá tu email y contraseña.')
     } finally {
       setLoading(false)
     }
@@ -212,28 +201,6 @@ export default function LoginPage() {
                     </p>
                   </div>
                 </div>
-              </div>
-
-              {/* Acceso demo */}
-              <button
-                type="button"
-                onClick={loadDemo}
-                className="w-full mb-6 flex items-center gap-3 px-4 py-3 rounded-xl border border-outline-variant/30 bg-surface-container-low hover:bg-surface-container transition-all text-left group"
-              >
-                <span className="material-symbols-outlined text-primary text-[20px]">bolt</span>
-                <span className="flex-1 block">
-                  <span className="text-sm font-bold text-on-surface block">Usar cuenta demo de {selectedRoleData!.label}</span>
-                  <span className="text-xs text-on-surface-variant block">{selectedRoleData!.demo.email}</span>
-                </span>
-                <span className="text-xs font-bold text-primary-container px-2 py-1 bg-primary-fixed rounded-lg">
-                  Demo
-                </span>
-              </button>
-
-              <div className="flex items-center gap-3 mb-6">
-                <div className="flex-1 h-px bg-outline-variant/20" />
-                <span className="text-xs text-outline font-medium">o ingresa tus datos</span>
-                <div className="flex-1 h-px bg-outline-variant/20" />
               </div>
 
               <form onSubmit={handleSubmit(onSubmit)} className="space-y-5">

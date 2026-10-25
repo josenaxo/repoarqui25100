@@ -1,0 +1,41 @@
+# Servicio health (B1-03): plantilla de servicio hexagonal de Ceibbo.
+# Usa el HTTP API, el autorizador y la tabla de infra/shared: primero desplegar infra/shared en el mismo stage.
+# Despliegue: serverless deploy --stage <rol1|rol2|rol3|demo>
+service: ceibbo-health
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 10
+  # En el Learner Lab no se pueden crear roles: se usa el LabRole que ya existe
+  iam:
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
+  # API compartido de infra/shared: no se crea uno nuevo
+  httpApi:
+    id: ${cf:ceibbo-shared-${sls:stage}.HttpApiId}
+  environment:
+    TABLE_NAME: ${cf:ceibbo-shared-${sls:stage}.TableName}
+
+# Las pruebas y los .md no se suben a la Lambda
+package:
+  patterns:
+    - '!test/**'
+    - '!**/*.md'
+
+functions:
+  health:
+    handler: src/adapters/in/http.handler
+    events:
+      - httpApi:
+          method: GET
+          path: /health
+      - httpApi:
+          method: GET
+          path: /health/privado
+          authorizer:
+            type: jwt
+            id: ${cf:ceibbo-shared-${sls:stage}.AuthorizerId}

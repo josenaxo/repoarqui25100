@@ -1,6 +1,6 @@
 openapi: 3.0.3
 info:
-  title: Ceibbo · servicio perfiles
+  title: Ceibbo - servicio perfiles
   version: 1.0.0
   description: |
     Perfiles de estudiantes, empresas y colegios, y la configuración (personalización) de cada colegio.
@@ -40,6 +40,11 @@ paths:
               schema: { $ref: '#/components/schemas/Perfil' }
         '400': { $ref: '#/components/responses/SolicitudInvalida' }
         '401': { $ref: '#/components/responses/NoAutenticado' }
+        '403':
+          description: El usuario es de un colegio o de una empresa (no se registran por esta vía)
+          content:
+            application/json:
+              schema: { $ref: '#/components/schemas/Error' }
         '409':
           description: El usuario ya tiene perfil
           content:
@@ -50,7 +55,8 @@ paths:
     get:
       operationId: obtenerPerfil
       summary: Ver mi perfil (patrón 2)
-      x-grupos: [estudiante, empresa, colegio]
+      description: Un usuario recién registrado todavía no tiene grupo en su token; por eso recibe 404 (sin perfil) y no 403.
+      x-grupos: [cualquier usuario autenticado, solo su propio perfil]
       responses:
         '200':
           description: Perfil del usuario del token
@@ -62,8 +68,8 @@ paths:
     put:
       operationId: actualizarPerfil
       summary: Editar mi perfil (patrón 3)
-      description: Reemplaza los campos editables. `readinessScore`, `profileViews`, `tipo` y `userId` no se pueden editar y se ignoran.
-      x-grupos: [estudiante, empresa, colegio]
+      description: Actualiza los campos editables enviados. `readinessScore`, `profileViews`, `tipo` y `userId` no se pueden editar y se ignoran.
+      x-grupos: [cualquier usuario autenticado, solo su propio perfil]
       requestBody:
         required: true
         content:
@@ -200,7 +206,7 @@ components:
         nombre: { type: string, maxLength: 60, example: Matías }
         apellido: { type: string, maxLength: 60, example: Arancibia }
         colegioId: { type: string, example: school-1 }
-        especialidad: { type: string, maxLength: 80, example: Ingeniería Civil Informática }
+        especialidad: { type: string, maxLength: 80, example: Programación, description: "Una de las especialidades TP oficiales del Mineduc (sola o con su mención), y que imparta el colegio del estudiante. Vacía para quitarla." }
 
     PerfilEditable:
       type: object
@@ -210,7 +216,7 @@ components:
         apellido: { type: string, maxLength: 60 }
         titular: { type: string, maxLength: 120 }
         bio: { type: string, maxLength: 1000 }
-        especialidad: { type: string, maxLength: 80 }
+        especialidad: { type: string, maxLength: 80, description: "Una de las especialidades TP oficiales del Mineduc (sola o con su mención), y que imparta el colegio del estudiante. Vacía para quitarla." }
         anio: { type: integer, minimum: 1, maximum: 7 }
         telefono: { type: string, maxLength: 20 }
         ubicacion: { type: string, maxLength: 80 }
@@ -250,7 +256,9 @@ components:
         sitioWeb: { type: string, format: uri }
         especialidades:
           type: array
-          items: { type: string }
+          maxItems: 20
+          description: Especialidades que imparte el colegio. Solo se aceptan las TP oficiales del Mineduc, solas o con su mención, por ejemplo "Gastronomía" o "Gastronomía - Mención Cocina".
+          items: { type: string, maxLength: 80 }
         logo: { type: string }
         colorPrincipal:
           type: string

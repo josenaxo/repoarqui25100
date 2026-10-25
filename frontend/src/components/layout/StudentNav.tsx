@@ -7,6 +7,7 @@ import { Avatar } from '@/components/ui/Avatar'
 import { CeibboLogoMark } from '@/components/ui/CeibboLogoMark'
 import { useAuthStore } from '@/store/auth.store'
 import { api } from '@/lib/api-client'
+import { obtenerPerfil, nombreCompleto } from '@/lib/api/perfiles'
 import { useState, useEffect, useRef, Suspense } from 'react'
 import { useRouter } from 'next/navigation'
 
@@ -194,9 +195,10 @@ export function StudentNav() {
 
   useEffect(() => {
     if (!isAuthenticated) return
-    api.get<{ firstName: string; lastName: string }>('/students/me')
+    obtenerPerfil()
       .then(p => {
-        if (p?.firstName) setDisplayName(`${p.firstName} ${p.lastName}`.trim())
+        const nombre = nombreCompleto(p)
+        if (nombre) setDisplayName(nombre)
       })
       .catch(() => {})
   }, [isAuthenticated])

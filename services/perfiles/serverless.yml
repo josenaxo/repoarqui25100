@@ -1,0 +1,64 @@
+# Servicio perfiles (B2-02): una lambda con las 7 rutas del contrato (contracts/api/perfiles.yaml)
+# usa el HTTP API, la tabla y el user pool de infra/shared, asi que primero hay que desplegar infra/shared en el mismo stage
+# deploy: serverless deploy --stage rol3
+service: ceibbo-perfiles
+frameworkVersion: "4"
+
+provider:
+  name: aws
+  runtime: nodejs22.x
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+  memorySize: 256
+  timeout: 10
+  # en el learner lab no se pueden crear roles, se usa el LabRole que ya existe
+  iam:
+    role: arn:aws:iam::${aws:accountId}:role/LabRole
+  # el API es el compartido de infra/shared, no se crea uno nuevo
+  httpApi:
+    id: ${cf:ceibbo-shared-${sls:stage}.HttpApiId}
+  environment:
+    TABLE_NAME: ${cf:ceibbo-shared-${sls:stage}.TableName}
+    USER_POOL_ID: ${cf:ceibbo-shared-${sls:stage}.UserPoolId}
+
+# los tests y los md no se suben a la lambda
+package:
+  patterns:
+    - "!test/**"
+    - "!**/*.md"
+
+functions:
+  perfiles:
+    handler: src/adapters/in/http.handler
+    events:
+      # todas las rutas pasan por el autorizador JWT de cognito (el &autorizador se reutiliza con *autorizador)
+      - httpApi:
+          method: POST
+          path: /perfiles
+          authorizer: &autorizador
+            type: jwt
+            id: ${cf:ceibbo-shared-${sls:stage}.AuthorizerId}
+      - httpApi:
+          method: GET
+          path: /perfiles/me
+          authorizer: *autorizador
+      - httpApi:
+          method: PUT
+          path: /perfiles/me
+          authorizer: *autorizador
+      - httpApi:
+          method: GET
+          path: /colegios
+          authorizer: *autorizador
+      - httpApi:
+          method: GET
+          path: /colegios/{id}/config
+          authorizer: *autorizador
+      - httpApi:
+          method: PUT
+          path: /colegios/{id}/config
+          authorizer: *autorizador
+      - httpApi:
+          method: GET
+          path: /colegios/{id}/estudiantes
+          authorizer: *autorizador

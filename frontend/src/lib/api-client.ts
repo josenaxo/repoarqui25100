@@ -1,4 +1,6 @@
 import axios, { AxiosError, AxiosInstance, InternalAxiosRequestConfig } from 'axios'
+import { leerSesion } from '@/lib/cognito'
+import { useAuthStore } from '@/store/auth.store'
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL ?? 'http://localhost:3001/api'
 
@@ -10,12 +12,13 @@ const apiClient: AxiosInstance = axios.create({
 })
 
 // ─── Request interceptor — attach JWT ─────────────────────────────────────────
+// leerSesion renueva el token con el refresh token de Cognito si ya vencio
 apiClient.interceptors.request.use(
-  (config: InternalAxiosRequestConfig) => {
+  async (config: InternalAxiosRequestConfig) => {
     if (typeof window !== 'undefined') {
-      const token = localStorage.getItem('access_token')
-      if (token) {
-        config.headers.Authorization = `Bearer ${token}`
+      const sesion = await leerSesion().catch(() => null)
+      if (sesion) {
+        config.headers.Authorization = `Bearer ${sesion.accessToken}`
       }
     }
     return config
@@ -23,29 +26,14 @@ apiClient.interceptors.request.use(
   (error) => Promise.reject(error),
 )
 
-// ─── Response interceptor — handle 401 / token refresh ───────────────────────
+// ─── Response interceptor — handle 401 ───────────────────────────────────────
+// si igual llega un 401 la sesion ya no sirve (por ejemplo, vencio el refresh token)
 apiClient.interceptors.response.use(
   (response) => response,
-  async (error: AxiosError) => {
-    const originalRequest = error.config as InternalAxiosRequestConfig & { _retry?: boolean }
-
-    if (error.response?.status === 401 && !originalRequest._retry) {
-      originalRequest._retry = true
-      try {
-        const refreshToken = localStorage.getItem('refresh_token')
-        if (!refreshToken) throw new Error('No refresh token')
-
-        const { data } = await axios.post(`${API_BASE_URL}/auth/refresh`, { refreshToken })
-        localStorage.setItem('access_token', data.accessToken)
-        localStorage.setItem('refresh_token', data.refreshToken)
-
-        originalRequest.headers.Authorization = `Bearer ${data.accessToken}`
-        return apiClient(originalRequest)
-      } catch {
-        localStorage.removeItem('access_token')
-        localStorage.removeItem('refresh_token')
-        window.location.href = '/auth/login'
-      }
+  (error: AxiosError) => {
+    if (error.response?.status === 401 && typeof window !== 'undefined') {
+      useAuthStore.getState().logout()
+      window.location.href = '/auth/login'
     }
 
     return Promise.reject(error)

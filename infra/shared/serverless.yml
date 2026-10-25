@@ -1,0 +1,145 @@
+# Infraestructura compartida de Ceibbo (tarea B1-02, Rol 1)
+# Despliegue: serverless deploy --stage <rol1|rol2|rol3|demo>
+service: ceibbo-shared
+frameworkVersion: '4'
+
+provider:
+  name: aws
+  region: us-east-1
+  stage: ${opt:stage, 'dev'}
+
+resources:
+  Resources:
+    AppTable:
+      Type: AWS::DynamoDB::Table
+      Properties:
+        TableName: ceibbo-app-${sls:stage}
+        BillingMode: PAY_PER_REQUEST
+        AttributeDefinitions:
+          - { AttributeName: PK, AttributeType: S }
+          - { AttributeName: SK, AttributeType: S }
+          - { AttributeName: GSI1PK, AttributeType: S }
+          - { AttributeName: GSI1SK, AttributeType: S }
+        KeySchema:
+          - { AttributeName: PK, KeyType: HASH }
+          - { AttributeName: SK, KeyType: RANGE }
+        GlobalSecondaryIndexes:
+          - IndexName: GSI1
+            KeySchema:
+              - { AttributeName: GSI1PK, KeyType: HASH }
+              - { AttributeName: GSI1SK, KeyType: RANGE }
+            Projection: { ProjectionType: ALL }
+        TimeToLiveSpecification: { AttributeName: ttl, Enabled: true }
+    
+    FilesBucket:
+      Type: AWS::S3::Bucket
+      Properties:
+        PublicAccessBlockConfiguration:
+          BlockPublicAcls: true
+          BlockPublicPolicy: true
+          IgnorePublicAcls: true
+          RestrictPublicBuckets: true
+        CorsConfiguration:
+          CorsRules:
+            - AllowedMethods: [PUT, GET]
+              AllowedOrigins: ['*']
+              AllowedHeaders: ['*']
+    EventsDLQ:
+      Type: AWS::SQS::Queue # Elegir el servicio de aws
+      Properties:
+        MessageRetentionPeriod: 1209600 # El máximo, son 14 días
+    # La cola principal
+    EventsQueue:
+      Type: AWS::SQS::Queue
+      Properties:
+        VisibilityTimeout: 210 # al menos 6 veces el timeout de Lambda para procesar una cola
+        RedrivePolicy: 
+          deadLetterTargetArn: !GetAtt EventsDLQ.Arn # Manda las que fallasn a DLQ
+          maxReceiveCount: 5 # Numero de fallos antes de mandarlo a DLQ
+    #Usuarios de Ceibbo con Cognito
+    UserPool:
+      Type: AWS::Cognito::UserPool
+      Properties:
+        UserPoolName: ceibbo-${sls:stage}
+        UsernameAttributes:
+          - email
+        AutoVerifiedAttributes:
+          - email
+        VerificationMessageTemplate:
+          DefaultEmailOption: CONFIRM_WITH_CODE
+          EmailSubject: 'Tu código de verificación'
+          EmailMessage: 'Hola. Tu código para activar tu cuenta es {####}. Ingrésalo en la página de registro.'
+             
+    UserPoolClient:
+      Type: AWS::Cognito::UserPoolClient
+      Properties:
+        UserPoolId: !Ref UserPool
+        GenerateSecret: false
+        ExplicitAuthFlows:
+          - ALLOW_USER_SRP_AUTH
+          - ALLOW_USER_PASSWORD_AUTH # solo para tokens de prueba (B1-17)
+          - ALLOW_REFRESH_TOKEN_AUTH
+    
+    # Tipos de usuario: el grupo viaja en el token (cognito:groups)
+    GrupoEstudiante:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        UserPoolId: !Ref UserPool
+        GroupName: estudiante
+
+    GrupoEmpresa:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        UserPoolId: !Ref UserPool
+        GroupName: empresa
+
+    GrupoColegio:
+      Type: AWS::Cognito::UserPoolGroup
+      Properties:
+        UserPoolId: !Ref UserPool
+        GroupName: colegio
+    
+    # Puerta de entrada única para todos los servicios
+    HttpApi:
+      Type: AWS::ApiGatewayV2::Api
+      Properties:
+        Name: ceibbo-${sls:stage}
+        ProtocolType: HTTP
+        CorsConfiguration:
+          AllowOrigins: ['*'] # restringir en el diseño de seguridad
+          AllowMethods: [GET, POST, PUT, PATCH, DELETE, OPTIONS]
+          AllowHeaders: [Authorization, Content-Type]
+
+    HttpApiStage:
+      Type: AWS::ApiGatewayV2::Stage
+      Properties:
+        ApiId: !Ref HttpApi
+        StageName: '$default'
+        AutoDeploy: true
+    
+
+    # Guardia: revisa el token de Cognito antes de llegar a la Lambda
+    CognitoAuthorizer:
+      Type: AWS::ApiGatewayV2::Authorizer
+      Properties:
+        ApiId: !Ref HttpApi
+        Name: cognito
+        AuthorizerType: JWT
+        IdentitySource:
+          - '$request.header.Authorization'
+        JwtConfiguration:
+          Issuer: !Sub https://cognito-idp.${AWS::Region}.amazonaws.com/${UserPool}
+          Audience:
+            - !Ref UserPoolClient
+  
+  # Directorio: valores que leen los servicios con ${cf:ceibbo-shared-<stage>.Nombre}
+  Outputs:
+    TableName: { Value: !Ref AppTable }
+    BucketName: { Value: !Ref FilesBucket }
+    EventsQueueUrl: { Value: !Ref EventsQueue }
+    EventsQueueArn: { Value: !GetAtt EventsQueue.Arn }
+    UserPoolId: { Value: !Ref UserPool }
+    UserPoolClientId: { Value: !Ref UserPoolClient }
+    HttpApiId: { Value: !Ref HttpApi }
+    HttpApiUrl: { Value: !GetAtt HttpApi.ApiEndpoint }
+    AuthorizerId: { Value: !Ref CognitoAuthorizer }

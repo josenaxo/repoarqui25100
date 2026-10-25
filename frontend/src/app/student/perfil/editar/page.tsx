@@ -2,10 +2,18 @@
 
 import { useState, useEffect } from 'react'
 import { useRouter } from 'next/navigation'
-import { api } from '@/lib/api-client'
 import { useAuthStore } from '@/store/auth.store'
-import type { StudentProfile } from '@/types'
 import { usePageTitle } from '@/lib/usePageTitle'
+import {
+  obtenerPerfil, actualizarPerfil, listarColegios, obtenerConfigColegio, mensajeDeError,
+  type ColegioResumen,
+} from '@/lib/api/perfiles'
+import { SelectorEspecialidad } from '@/components/ui/SelectorEspecialidad'
+
+// los mismos largos que valida el servicio perfiles
+const LARGOS = { nombre: 60, apellido: 60, titular: 120, bio: 1000, telefono: 20, ubicacion: 80 }
+
+const clasesCampo = 'w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors'
 
 export default function EditarPerfilStudentPage() {
   usePageTitle('Editar perfil')
@@ -16,60 +24,75 @@ export default function EditarPerfilStudentPage() {
   const [error,   setError]     = useState<string | null>(null)
   const [success, setSuccess]   = useState(false)
 
-  const [schools, setSchools] = useState<{ id: string; userId: string; name: string }[]>([])
+  const [colegios, setColegios]             = useState<ColegioResumen[]>([])
+  const [especialidades, setEspecialidades] = useState<string[]>([])
+  const [avisoEspecialidad, setAvisoEspecialidad] = useState('')
   const [form, setForm] = useState({
-    firstName: '', lastName: '', headline: '', bio: '',
-    specialty: '', year: 1, phone: '', location: '',
-    linkedinUrl: '', githubUrl: '', portfolioUrl: '',
-    schoolUserId: '',
+    nombre: '', apellido: '', titular: '', bio: '',
+    especialidad: '', anio: '' as number | '', telefono: '', ubicacion: '',
+    colegioId: '',
   })
 
   useEffect(() => {
-    api.get<{ id: string; userId: string; name: string }[]>('/schools').catch(() => [])
-      .then(data => setSchools(data))
-  }, [])
-
-  useEffect(() => {
     if (!isAuthenticated) { setLoading(false); return }
-    api.get<StudentProfile>('/students/me')
-      .then(p => {
+    Promise.all([obtenerPerfil(), listarColegios()])
+      .then(([p, lista]) => {
+        setColegios(lista)
         setForm({
-          firstName:    p.firstName ?? '',
-          lastName:     p.lastName ?? '',
-          headline:     p.headline ?? '',
+          nombre:       p.nombre ?? '',
+          apellido:     p.apellido ?? '',
+          titular:      p.titular ?? '',
           bio:          p.bio ?? '',
-          specialty:    p.specialty ?? '',
-          year:         p.year ?? 1,
-          phone:        p.phone ?? '',
-          location:     p.location ?? '',
-          linkedinUrl:  p.linkedinUrl ?? '',
-          githubUrl:    p.githubUrl ?? '',
-          portfolioUrl: p.portfolioUrl ?? '',
-          schoolUserId: (p as any).schoolUserId ?? '',
+          especialidad: p.especialidad ?? '',
+          anio:         p.anio ?? '',
+          telefono:     p.telefono ?? '',
+          ubicacion:    p.ubicacion ?? '',
+          colegioId:    p.colegioId ?? '',
         })
       })
-      .catch(() => {})
+      .catch(err => setError(mensajeDeError(err, 'No se pudo cargar tu perfil.')))
       .finally(() => setLoading(false))
   }, [isAuthenticated])
 
+  // la especialidad se elige de las que imparte el colegio, que son oficiales del Mineduc
+  useEffect(() => {
+    if (!form.colegioId) { setEspecialidades([]); return }
+    obtenerConfigColegio(form.colegioId)
+      .then(c => {
+        const lista = c.especialidades ?? []
+        setEspecialidades(lista)
+        // una especialidad guardada antes que el colegio no imparte (o escrita a mano) se quita
+        setForm(prev => {
+          if (!prev.especialidad || lista.includes(prev.especialidad)) return prev
+          setAvisoEspecialidad(`"${prev.especialidad}" no está entre las especialidades de tu colegio. Elige una de la lista.`)
+          return { ...prev, especialidad: '' }
+        })
+      })
+      .catch(() => setEspecialidades([]))
+  }, [form.colegioId])
+
   const set = (field: keyof typeof form, value: string | number) =>
     setForm(prev => ({ ...prev, [field]: value }))
+
+  const cambiarColegio = (colegioId: string) => {
+    setAvisoEspecialidad('')
+    setForm(prev => ({ ...prev, colegioId, especialidad: '' }))
+  }
+
+  // solo las que imparte el colegio; el selector las agrupa por sector como el listado del Mineduc
+  const opcionesEspecialidad = especialidades
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setSaving(true)
     setError(null)
     try {
-      await api.patch('/students/me', {
-        ...form,
-        year: Number(form.year),
-        schoolUserId: form.schoolUserId || undefined,
-      })
+      const { anio, ...resto } = form
+      await actualizarPerfil({ ...resto, ...(anio === '' ? {} : { anio }) })
       setSuccess(true)
       setTimeout(() => router.push('/student/perfil'), 1200)
     } catch (err: any) {
-      const msg = err?.response?.data?.message
-      setError(Array.isArray(msg) ? msg[0] : msg ?? 'Error al guardar los cambios.')
+      setError(mensajeDeError(err, 'Error al guardar los cambios.'))
     } finally {
       setSaving(false)
     }
@@ -106,49 +129,51 @@ export default function EditarPerfilStudentPage() {
           <h2 className="font-semibold text-on-surface mb-4">Información básica</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label htmlFor="firstName" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Nombre</label>
+              <label htmlFor="nombre" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Nombre</label>
               <input
-                id="firstName"
-                value={form.firstName}
-                onChange={e => set('firstName', e.target.value)}
-                className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                id="nombre"
+                value={form.nombre}
+                onChange={e => set('nombre', e.target.value)}
+                className={clasesCampo}
                 placeholder="Nombre"
-                maxLength={100}
+                maxLength={LARGOS.nombre}
+                required
               />
             </div>
             <div>
-              <label htmlFor="lastName" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Apellido</label>
+              <label htmlFor="apellido" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Apellido</label>
               <input
-                id="lastName"
-                value={form.lastName}
-                onChange={e => set('lastName', e.target.value)}
-                className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+                id="apellido"
+                value={form.apellido}
+                onChange={e => set('apellido', e.target.value)}
+                className={clasesCampo}
                 placeholder="Apellido"
-                maxLength={100}
+                maxLength={LARGOS.apellido}
+                required
               />
             </div>
           </div>
 
           <div className="mt-4">
             <div className="flex items-center justify-between mb-1.5">
-              <label htmlFor="headline" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide block">Titular / Headline</label>
-              <span id="headline-count" className="text-[11px] text-on-surface-variant tabular-nums">{form.headline.length}/150</span>
+              <label htmlFor="titular" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide block">Titular / Headline</label>
+              <span id="titular-count" className="text-[11px] text-on-surface-variant tabular-nums">{form.titular.length}/{LARGOS.titular}</span>
             </div>
             <input
-              id="headline"
-              value={form.headline}
-              onChange={e => set('headline', e.target.value)}
-              aria-describedby="headline-count"
-              className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors"
+              id="titular"
+              value={form.titular}
+              onChange={e => set('titular', e.target.value)}
+              aria-describedby="titular-count"
+              className={clasesCampo}
               placeholder="Ej: Desarrollador Full Stack · Especialidad Informática"
-              maxLength={150}
+              maxLength={LARGOS.titular}
             />
           </div>
 
           <div className="mt-4">
             <div className="flex items-center justify-between mb-1.5">
               <label htmlFor="bio" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide block">Biografía</label>
-              <span id="bio-count" className="text-[11px] text-on-surface-variant tabular-nums">{form.bio.length}/500</span>
+              <span id="bio-count" className="text-[11px] text-on-surface-variant tabular-nums">{form.bio.length}/{LARGOS.bio}</span>
             </div>
             <textarea
               id="bio"
@@ -156,39 +181,10 @@ export default function EditarPerfilStudentPage() {
               onChange={e => set('bio', e.target.value)}
               rows={3}
               aria-describedby="bio-count"
-              className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors resize-none"
-              placeholder="Cuéntale a las empresas sobre vos..."
-              maxLength={500}
+              className={`${clasesCampo} resize-none`}
+              placeholder="Cuéntale a las empresas sobre ti..."
+              maxLength={LARGOS.bio}
             />
-          </div>
-        </div>
-
-        {/* Academic Info */}
-        <div className="card p-6">
-          <h2 className="font-semibold text-on-surface mb-4">Información académica</h2>
-          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-            <div>
-              <label htmlFor="specialty" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Especialidad</label>
-              <input
-                id="specialty"
-                value={form.specialty}
-                onChange={e => set('specialty', e.target.value)}
-                className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors"
-                placeholder="Informática, Electrónica..."
-                maxLength={100}
-              />
-            </div>
-            <div>
-              <label htmlFor="year" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Año</label>
-              <select
-                id="year"
-                value={form.year}
-                onChange={e => set('year', Number(e.target.value))}
-                className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors"
-              >
-                {[1,2,3,4].map(y => <option key={y} value={y}>{y}° año</option>)}
-              </select>
-            </div>
           </div>
         </div>
 
@@ -199,20 +195,63 @@ export default function EditarPerfilStudentPage() {
             Vincularte a tu colegio permite que vean tus habilidades y puedan validarlas.
           </p>
           <div>
-            <label htmlFor="schoolUserId" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">
+            <label htmlFor="colegioId" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">
               Colegio
             </label>
             <select
-              id="schoolUserId"
-              value={form.schoolUserId}
-              onChange={e => set('schoolUserId', e.target.value)}
-              className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2.5 text-sm outline-none transition-colors"
+              id="colegioId"
+              value={form.colegioId}
+              onChange={e => cambiarColegio(e.target.value)}
+              className={`${clasesCampo} py-2.5`}
             >
               <option value="">— Sin colegio vinculado —</option>
-              {schools.map(s => (
-                <option key={s.userId} value={s.userId}>{s.name}</option>
+              {colegios.map(c => (
+                <option key={c.id} value={c.id}>{c.nombre}</option>
               ))}
             </select>
+          </div>
+        </div>
+
+        {/* Academic Info */}
+        <div className="card p-6 overflow-visible relative z-20">
+          <h2 className="font-semibold text-on-surface mb-4">Información académica</h2>
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+            <div className="sm:col-span-2">
+              <label htmlFor="especialidad" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Especialidad</label>
+              <SelectorEspecialidad
+                id="especialidad"
+                valor={form.especialidad}
+                permitidas={opcionesEspecialidad}
+                onElegir={esp => { setAvisoEspecialidad(''); set('especialidad', esp) }}
+                placeholder="Elige tu especialidad..."
+                disabled={opcionesEspecialidad.length === 0}
+              />
+              {form.especialidad && (
+                <button type="button" onClick={() => set('especialidad', '')} className="text-[11px] font-semibold text-primary hover:underline mt-1">
+                  Quitar especialidad
+                </button>
+              )}
+              {opcionesEspecialidad.length === 0 && (
+                <p id="especialidad-hint" className="text-[11px] text-on-surface-variant mt-1">
+                  {form.colegioId ? 'Tu colegio todavía no configura sus especialidades.' : 'Elige primero tu colegio.'}
+                </p>
+              )}
+              {avisoEspecialidad && (
+                <p className="text-[11px] text-error mt-1">{avisoEspecialidad}</p>
+              )}
+            </div>
+            <div>
+              <label htmlFor="anio" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Año</label>
+              <select
+                id="anio"
+                value={form.anio}
+                onChange={e => set('anio', e.target.value === '' ? '' : Number(e.target.value))}
+                className={clasesCampo}
+              >
+                <option value="">Seleccionar...</option>
+                {[1,2,3,4].map(y => <option key={y} value={y}>{y}° año</option>)}
+              </select>
+            </div>
           </div>
         </div>
 
@@ -221,60 +260,32 @@ export default function EditarPerfilStudentPage() {
           <h2 className="font-semibold text-on-surface mb-4">Contacto y ubicación</h2>
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
             <div>
-              <label htmlFor="phone" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Teléfono</label>
+              <label htmlFor="telefono" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Teléfono</label>
               <input
-                id="phone"
+                id="telefono"
                 type="tel"
-                value={form.phone}
-                onChange={e => set('phone', e.target.value)}
-                aria-describedby="phone-hint"
-                className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors"
-                placeholder="+54 11 1234-5678"
-                maxLength={20}
+                value={form.telefono}
+                onChange={e => set('telefono', e.target.value)}
+                aria-describedby="telefono-hint"
+                className={clasesCampo}
+                placeholder="+56 9 1234 5678"
+                maxLength={LARGOS.telefono}
                 pattern="^\+?[0-9\s-]{6,20}$"
                 title="Solo números, espacios, guiones y '+' al inicio"
               />
-              <p id="phone-hint" className="text-[11px] text-on-surface-variant mt-1">Solo números, espacios, guiones y &quot;+&quot; al inicio.</p>
+              <p id="telefono-hint" className="text-[11px] text-on-surface-variant mt-1">Solo números, espacios, guiones y &quot;+&quot; al inicio.</p>
             </div>
             <div>
-              <label htmlFor="location" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Ubicación</label>
+              <label htmlFor="ubicacion" className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1.5 block">Ubicación</label>
               <input
-                id="location"
-                value={form.location}
-                onChange={e => set('location', e.target.value)}
-                className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors"
-                placeholder="Buenos Aires, Argentina"
-                maxLength={150}
+                id="ubicacion"
+                value={form.ubicacion}
+                onChange={e => set('ubicacion', e.target.value)}
+                className={clasesCampo}
+                placeholder="Santiago, Chile"
+                maxLength={LARGOS.ubicacion}
               />
             </div>
-          </div>
-        </div>
-
-        {/* Social Links */}
-        <div className="card p-6">
-          <h2 className="font-semibold text-on-surface mb-4">Links y redes</h2>
-          <div className="space-y-3">
-            {[
-              { field: 'linkedinUrl' as const, label: 'LinkedIn URL', icon: 'link', placeholder: 'https://linkedin.com/in/tu-perfil' },
-              { field: 'githubUrl'   as const, label: 'GitHub URL',   icon: 'code', placeholder: 'https://github.com/usuario' },
-              { field: 'portfolioUrl' as const, label: 'Portfolio URL', icon: 'public', placeholder: 'https://miportfolio.dev' },
-            ].map(({ field, label, icon, placeholder }) => (
-              <div key={field} className="flex items-center gap-3">
-                <span className="material-symbols-outlined text-outline text-[20px]" aria-hidden="true">{icon}</span>
-                <div className="flex-1">
-                  <label htmlFor={field} className="text-xs font-bold text-on-surface-variant uppercase tracking-wide mb-1 block">{label}</label>
-                  <input
-                    id={field}
-                    type="url"
-                    value={form[field]}
-                    onChange={e => set(field, e.target.value)}
-                    className="w-full bg-surface-container-low border border-outline-variant/30 focus:border-primary/60 focus-visible:ring-2 focus-visible:ring-primary rounded-lg px-3 py-2 text-sm outline-none transition-colors"
-                    placeholder={placeholder}
-                    maxLength={300}
-                  />
-                </div>
-              </div>
-            ))}
           </div>
         </div>
 
